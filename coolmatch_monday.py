@@ -60,53 +60,67 @@ class MondayIntegration:
 
     def create_item(self, item_name: str, column_values: Dict) -> Optional[str]:
         """
-        Erstellt ein neues Item in Monday.com
-
-        FIX: column_values wird korrekt als JSON-String escaped.
+        Erstellt ein neues Item in Monday.com.
+        Bei ColumnValueException (z.B. unbekannter Dropdown-Wert) →
+        automatischer Retry ohne die problematische Spalte.
         """
         if not self.is_configured():
             return None
 
-        column_values_json = json.dumps(column_values)
-        # Escape für GraphQL-String: " → \"
-        column_values_escaped = column_values_json.replace("\\", "\\\\").replace('"', '\\"')
-        item_name_escaped = item_name.replace("\\", "\\\\").replace('"', '\\"')
-
-        query = f'''
-        mutation {{
-            create_item (
-                board_id: {self.board_id},
-                item_name: "{item_name_escaped}",
-                column_values: "{column_values_escaped}"
-            ) {{
-                id
+        def _try_create(cv: Dict) -> Optional[str]:
+            cv_json = json.dumps(cv)
+            cv_escaped = cv_json.replace("\\", "\\\\").replace('"', '\\"')
+            item_name_escaped = item_name.replace("\\", "\\\\").replace('"', '\\"')
+            query = f'''
+            mutation {{
+                create_item (
+                    board_id: {self.board_id},
+                    item_name: "{item_name_escaped}",
+                    column_values: "{cv_escaped}"
+                ) {{
+                    id
+                }}
             }}
-        }}
-        '''
+            '''
+            try:
+                response = requests.post(
+                    self.api_url,
+                    headers=self.headers,
+                    json={"query": query},
+                    timeout=10
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    # Prüfe auf ColumnValueException
+                    if 'errors' in data:
+                        for err in data['errors']:
+                            code = err.get('extensions', {}).get('code', '')
+                            if code == 'ColumnValueException':
+                                return 'COLUMN_ERROR'
+                        print(f"Monday.com GraphQL Error: {data['errors']}")
+                        return None
+                    if 'data' in data and data['data'] and 'create_item' in data['data']:
+                        item = data['data']['create_item']
+                        if item:
+                            return item['id']
+                else:
+                    print(f"Monday.com HTTP Error: {response.status_code}")
+                return None
+            except Exception as e:
+                print(f"Monday.com API Error: {e}")
+                return None
 
-        try:
-            response = requests.post(
-                self.api_url,
-                headers=self.headers,
-                json={"query": query},
-                timeout=10
-            )
+        # Versuch 1: Mit allen Feldern
+        result = _try_create(column_values)
 
-            if response.status_code == 200:
-                data = response.json()
-                if 'data' in data and data['data'] and 'create_item' in data['data']:
-                    return data['data']['create_item']['id']
-                elif 'errors' in data:
-                    print(f"Monday.com GraphQL Error: {data['errors']}")
-                    return None
-            else:
-                print(f"Monday.com HTTP Error: {response.status_code} - {response.text}")
+        # Versuch 2: Bei Dropdown-Fehler → ohne Dropdown-Spalten wiederholen
+        if result == 'COLUMN_ERROR':
+            print("⚠️ ColumnValueException → Retry ohne Dropdown-Spalten")
+            cv_fallback = {k: v for k, v in column_values.items()
+                          if not k.startswith('dropdown_') and not k.startswith('color_')}
+            result = _try_create(cv_fallback)
 
-            return None
-
-        except Exception as e:
-            print(f"Monday.com API Error: {e}")
-            return None
+        return result if result and result != 'COLUMN_ERROR' else None
 
     def upload_file_to_item(self, item_id: str, file_bytes: bytes, filename: str,
                             column_id: str = "file_mkngj4yq") -> bool:
@@ -201,9 +215,13 @@ class MondayIntegration:
         if 'angebotswert' in quote_data:
             column_values['numeric_mknst7mm'] = str(round(float(quote_data['angebotswert']), 2))
 
-        # ── Partner (dropdown) ── {"labels": ["Wert"]}
+        # ── Partner (dropdown) ── nur setzen wenn Label bekannt, sonst weglassen
+        # Verhindert ColumnValueException wenn Label nicht in Monday existiert
         if 'partner' in quote_data:
-            column_values['dropdown_mknagc5a'] = {"labels": [str(quote_data['partner'])]}
+            partner_raw = str(quote_data['partner']).lstrip('°').strip()
+            if partner_raw:
+                partner_clean = partner_raw[0].upper() + partner_raw[1:]
+                column_values['dropdown_mknagc5a'] = {"labels": [partner_clean]}
 
         # ── PLZ (text) ── plain String
         if 'plz' in quote_data:
