@@ -735,6 +735,30 @@ def create_pdf_and_save(calc_df, p_firma, p_name, p_strasse, p_ort, p_email, p_t
                             pass
                     else:
                         st.warning("⚠️ Monday.com Upload fehlgeschlagen (siehe Logs)")
+                        # DEBUG: Direkt testen was Monday zurückgibt
+                        with st.expander("🔍 Monday.com Debug Info"):
+                            import requests, json
+                            headers = {
+                                "Authorization": st.session_state.monday.api_token,
+                                "Content-Type": "application/json"
+                            }
+                            # Test 1: Verbindung
+                            r = requests.post("https://api.monday.com/v2",
+                                headers=headers,
+                                json={"query": "query { me { name email } }"},
+                                timeout=10)
+                            st.write("**Verbindungstest:**", r.status_code, r.json())
+                            
+                            # Test 2: Item mit minimalen Feldern
+                            cv = {"date_mknqdvj8": {"date": "2026-02-16"}}
+                            cv_escaped = json.dumps(cv).replace("\\", "\\\\").replace('"', '\\"')
+                            q = f'mutation {{ create_item (board_id: {st.session_state.monday.board_id}, item_name: "DEBUG_TEST", column_values: "{cv_escaped}") {{ id }} }}'
+                            r2 = requests.post("https://api.monday.com/v2",
+                                headers=headers,
+                                json={"query": q},
+                                timeout=10)
+                            st.write("**Item erstellen (minimal):**", r2.status_code)
+                            st.json(r2.json())
             
             except Exception as e:
                 st.warning(f"⚠️ Monday.com Fehler: {e}")
