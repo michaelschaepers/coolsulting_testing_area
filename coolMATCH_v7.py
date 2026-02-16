@@ -110,16 +110,23 @@ def generate_angebots_nr():
     """
     Generiert laufende Angebots-Nummer aus der Datenbank.
     Format: AN-JJJJ-NNNN (z.B. AN-2026-0001)
-    FIX: Verhindert UNIQUE-Constraint-Fehler durch echte DB-Sequenz.
+    FIX: Nummer wird in Session State gecacht → keine Duplikate bei Reruns.
     """
+    # Wenn schon eine Nummer für diese Sitzung generiert wurde → dieselbe zurückgeben
+    if 'current_angebots_nr' in st.session_state and st.session_state.current_angebots_nr:
+        return st.session_state.current_angebots_nr
     try:
-        # DB-Instanz aus Session State (wird in main() initialisiert)
         if 'db' in st.session_state and st.session_state.db is not None:
-            return st.session_state.db.get_next_angebots_nr()
+            nr = st.session_state.db.get_next_angebots_nr()
+            st.session_state.current_angebots_nr = nr
+            return nr
     except Exception:
         pass
-    # Fallback: Timestamp (sollte nicht vorkommen)
-    return f"AN-{datetime.now().strftime('%Y-%m%d-%H%M')}"
+    # Fallback
+    year = datetime.now().strftime("%Y")
+    nr = f"AN-{year}-{datetime.now().strftime('%H%M')}"
+    st.session_state.current_angebots_nr = nr
+    return nr
 
 def extract_plz(ort_str):
     """Extrahiert PLZ aus Ort-String (z.B. '4020 Linz' -> '4020')"""
@@ -753,6 +760,10 @@ def create_pdf_and_save(calc_df, p_firma, p_name, p_strasse, p_ort, p_email, p_t
         
         Jetzt kannst du das PDF herunterladen oder ein neues Angebot starten.
         """)
+        
+        # Nummer für nächstes Angebot zurücksetzen
+        if 'current_angebots_nr' in st.session_state:
+            del st.session_state.current_angebots_nr
         
     except Exception as e:
         st.error(f"❌ Fehler: {e}")
