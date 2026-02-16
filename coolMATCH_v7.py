@@ -1,3 +1,4 @@
+
 # ==========================================
 # DATEI: coolMATCH_v7.py
 # VERSION: 7.0
@@ -748,17 +749,53 @@ def create_pdf_and_save(calc_df, p_firma, p_name, p_strasse, p_ort, p_email, p_t
                                 json={"query": "query { me { name email } }"},
                                 timeout=10)
                             st.write("**Verbindungstest:**", r.status_code, r.json())
-                            
-                            # Test 2: Item mit minimalen Feldern
-                            cv = {"date_mknqdvj8": {"date": "2026-02-16"}}
-                            cv_escaped = json.dumps(cv).replace("\\", "\\\\").replace('"', '\\"')
-                            q = f'mutation {{ create_item (board_id: {st.session_state.monday.board_id}, item_name: "DEBUG_TEST", column_values: "{cv_escaped}") {{ id }} }}'
-                            r2 = requests.post("https://api.monday.com/v2",
+
+                            # Test 2: Item mit ALLEN Feldern wie save_quote_to_monday
+                            cv_full = {
+                                "date_mknqdvj8": {"date": "2026-02-16"},
+                                "numeric_mknst7mm": str(round(float(brutto), 2)),
+                                "dropdown_mknagc5a": {"labels": [str(p_firma)]},
+                                "text_mkn9v26m": extract_plz(p_ort),
+                                "color_mkncgyk5": {"label": "Angebot"}
+                            }
+                            cv_escaped = json.dumps(cv_full).replace("\\", "\\\\").replace('"', '\\"')
+                            q_full = f'mutation {{ create_item (board_id: {st.session_state.monday.board_id}, item_name: "DEBUG_FULL_{c_nr}", column_values: "{cv_escaped}") {{ id }} }}'
+                            r_full = requests.post("https://api.monday.com/v2",
                                 headers=headers,
-                                json={"query": q},
+                                json={"query": q_full},
                                 timeout=10)
-                            st.write("**Item erstellen (minimal):**", r2.status_code)
-                            st.json(r2.json())
+                            st.write("**Item mit allen Feldern:**", r_full.status_code)
+                            st.json(r_full.json())
+
+                            # Test 3: PDF Upload testen (wenn Item erstellt)
+                            full_data = r_full.json()
+                            if 'data' in full_data and full_data['data'] and 'create_item' in full_data['data']:
+                                test_item_id = full_data['data']['create_item']['id']
+                                st.write(f"**Item ID:** {test_item_id} → teste PDF Upload...")
+                                
+                                # Minimales Test-PDF
+                                test_pdf = b"%PDF-1.4 test"
+                                upload_headers = {"Authorization": st.session_state.monday.api_token}
+                                query_upload = '''
+                                mutation ($file: File!, $itemId: ID!, $columnId: String!) {
+                                    add_file_to_column (file: $file, item_id: $itemId, column_id: $columnId) { id name }
+                                }'''
+                                variables = {"itemId": int(test_item_id), "columnId": "file_mkngj4yq"}
+                                map_data = {"image": ["variables.file"]}
+                                files = {
+                                    'query': (None, query_upload),
+                                    'variables': (None, json.dumps(variables)),
+                                    'map': (None, json.dumps(map_data)),
+                                    'image': ("test.pdf", test_pdf, 'application/pdf')
+                                }
+                                r_upload = requests.post(
+                                    "https://api.monday.com/v2/file",
+                                    headers=upload_headers,
+                                    files=files,
+                                    timeout=30
+                                )
+                                st.write("**PDF Upload:**", r_upload.status_code)
+                                st.json(r_upload.json())
             
             except Exception as e:
                 st.warning(f"⚠️ Monday.com Fehler: {e}")
