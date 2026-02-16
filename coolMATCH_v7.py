@@ -107,9 +107,19 @@ def add_to_cart(typ, art_nr, bez, menge, preis, rabatt, note=""):
     })
 
 def generate_angebots_nr():
-    """Generiert automatische Angebots-Nummer"""
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M")
-    return f"AN-{timestamp}"
+    """
+    Generiert laufende Angebots-Nummer aus der Datenbank.
+    Format: AN-JJJJ-NNNN (z.B. AN-2026-0001)
+    FIX: Verhindert UNIQUE-Constraint-Fehler durch echte DB-Sequenz.
+    """
+    try:
+        # DB-Instanz aus Session State (wird in main() initialisiert)
+        if 'db' in st.session_state and st.session_state.db is not None:
+            return st.session_state.db.get_next_angebots_nr()
+    except Exception:
+        pass
+    # Fallback: Timestamp (sollte nicht vorkommen)
+    return f"AN-{datetime.now().strftime('%Y-%m%d-%H%M')}"
 
 def extract_plz(ort_str):
     """Extrahiert PLZ aus Ort-String (z.B. '4020 Linz' -> '4020')"""
@@ -127,7 +137,7 @@ def main():
         st.set_page_config(page_title=f"{APP_NAME} v{APP_VERSION}", layout="wide")
         st.session_state.page_configured = True
 
-    # Session State initialisieren
+    # Session State initialisieren (DB ZUERST - wird von generate_angebots_nr gebraucht!)
     if 'cart' not in st.session_state:
         st.session_state.cart = []
     

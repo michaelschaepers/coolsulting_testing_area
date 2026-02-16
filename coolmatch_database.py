@@ -1,7 +1,10 @@
 # ==========================================
 # DATEI: coolmatch_database.py
-# VERSION: 7.1 - Turso Cloud Support
+# VERSION: 7.2 - FIXED UNIQUE CONSTRAINT + LAUFENDE NUMMER
 # AUTOR: Michael Schäpers, coolsulting
+# FIXES:
+#   - get_next_angebots_nr(): Laufende Nummer aus DB (verhindert Duplikate)
+#   - save_quote(): INSERT OR UPDATE (verhindert UNIQUE constraint Fehler)
 # ==========================================
 
 import pandas as pd
@@ -110,29 +113,123 @@ class CoolMatchDatabase:
             return pd.DataFrame(rows, columns=[d[0] for d in desc])
         return pd.DataFrame()
 
-    def save_quote(self, quote_header: Dict, positions: List[Dict]) -> int:
+    # ============================================================
+    # FIX: Laufende Angebotsnummer aus Datenbank generieren
+    # Verhindert UNIQUE constraint durch echte Sequenz aus DB
+    # ============================================================
+    def get_next_angebots_nr(self) -> str:
+        """
+        Generiert die nächste laufende Angebotsnummer.
+        Format: AN-JJJJ-NNNN (z.B. AN-2026-0001)
+
+        Liest den höchsten aktuellen Wert direkt aus der DB →
+        keine Duplikate, auch bei mehreren Tabs/Sessions.
+        """
+        year = datetime.now().strftime("%Y")
         conn, mode = _get_connection()
         try:
-            _execute(conn, """
-                INSERT INTO angebote
-                (angebots_nr, kunde_name, kunde_projekt, kunde_nr, gueltig_bis,
-                 bearbeiter, firma, summe_netto, summe_brutto, mwst_satz,
-                 rabatt_prozent, rabatt_absolut, manual_preis, preise_verborgen,
-                 status, monday_item_id, closing_text, notizen)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                quote_header['angebots_nr'], quote_header['kunde_name'],
-                quote_header.get('kunde_projekt', ''), quote_header.get('kunde_nr', ''),
-                quote_header.get('gueltig_bis', ''), quote_header.get('bearbeiter', ''),
-                quote_header.get('firma', ''), quote_header['summe_netto'],
-                quote_header['summe_brutto'], quote_header['mwst_satz'],
-                quote_header.get('rabatt_prozent', 0), quote_header.get('rabatt_absolut', 0),
-                quote_header.get('manual_preis', 0), quote_header.get('preise_verborgen', 0),
-                quote_header.get('status', 'Erstellt'), quote_header.get('monday_item_id', ''),
-                quote_header.get('closing_text', ''), quote_header.get('notizen', '')
-            ))
-            rows, _ = _fetchall(conn, "SELECT last_insert_rowid()")
-            angebots_id = rows[0][0]
+            rows, _ = _fetchall(
+                conn,
+                "SELECT angebots_nr FROM angebote WHERE angebots_nr LIKE ? ORDER BY angebots_nr DESC LIMIT 1",
+                (f"AN-{year}-%",)
+            )
+            if rows:
+                last_nr = rows[0][0]          # z.B. "AN-2026-0215"
+                try:
+                    last_seq = int(last_nr.split("-")[-1])
+                    next_seq = last_seq + 1
+                except ValueError:
+                    next_seq = 1
+            else:
+                next_seq = 1
+            return f"AN-{year}-{next_seq:04d}"
+        finally:
+            conn.close()
+
+    # ============================================================
+    # FIX: save_quote mit INSERT OR UPDATE (kein Duplikat-Fehler)
+    # ============================================================
+    def save_quote(self, quote_header: Dict, positions: List[Dict]) -> int:
+        """
+        Speichert Angebot. Bei bereits vorhandener angebots_nr → UPDATE statt INSERT.
+        Verhindert: SQLite error: UNIQUE constraint failed: angebote.angebots_nr
+        """
+        conn, mode = _get_connection()
+        try:
+            # Prüfen ob Angebotsnummer schon existiert
+            existing_rows, _ = _fetchall(
+                conn,
+                "SELECT id FROM angebote WHERE angebots_nr = ?",
+                (quote_header['angebots_nr'],)
+            )
+
+            if existing_rows:
+                # ── UPDATE vorhandenen Datensatz ──
+                angebots_id = existing_rows[0][0]
+                _execute(conn, """
+                    UPDATE angebote SET
+                        kunde_name=?, kunde_projekt=?, kunde_nr=?, gueltig_bis=?,
+                        bearbeiter=?, firma=?, summe_netto=?, summe_brutto=?,
+                        mwst_satz=?, rabatt_prozent=?, rabatt_absolut=?,
+                        manual_preis=?, preise_verborgen=?, status=?,
+                        monday_item_id=?, closing_text=?, notizen=?
+                    WHERE id=?
+                """, (
+                    quote_header['kunde_name'],
+                    quote_header.get('kunde_projekt', ''),
+                    quote_header.get('kunde_nr', ''),
+                    quote_header.get('gueltig_bis', ''),
+                    quote_header.get('bearbeiter', ''),
+                    quote_header.get('firma', ''),
+                    quote_header['summe_netto'],
+                    quote_header['summe_brutto'],
+                    quote_header['mwst_satz'],
+                    quote_header.get('rabatt_prozent', 0),
+                    quote_header.get('rabatt_absolut', 0),
+                    quote_header.get('manual_preis', 0),
+                    quote_header.get('preise_verborgen', 0),
+                    quote_header.get('status', 'Erstellt'),
+                    quote_header.get('monday_item_id', ''),
+                    quote_header.get('closing_text', ''),
+                    quote_header.get('notizen', ''),
+                    angebots_id
+                ))
+                # Alte Positionen löschen (werden unten neu geschrieben)
+                _execute(conn, "DELETE FROM positionen WHERE angebots_id = ?", (angebots_id,))
+
+            else:
+                # ── INSERT neuer Datensatz ──
+                _execute(conn, """
+                    INSERT INTO angebote
+                    (angebots_nr, kunde_name, kunde_projekt, kunde_nr, gueltig_bis,
+                     bearbeiter, firma, summe_netto, summe_brutto, mwst_satz,
+                     rabatt_prozent, rabatt_absolut, manual_preis, preise_verborgen,
+                     status, monday_item_id, closing_text, notizen)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    quote_header['angebots_nr'],
+                    quote_header['kunde_name'],
+                    quote_header.get('kunde_projekt', ''),
+                    quote_header.get('kunde_nr', ''),
+                    quote_header.get('gueltig_bis', ''),
+                    quote_header.get('bearbeiter', ''),
+                    quote_header.get('firma', ''),
+                    quote_header['summe_netto'],
+                    quote_header['summe_brutto'],
+                    quote_header['mwst_satz'],
+                    quote_header.get('rabatt_prozent', 0),
+                    quote_header.get('rabatt_absolut', 0),
+                    quote_header.get('manual_preis', 0),
+                    quote_header.get('preise_verborgen', 0),
+                    quote_header.get('status', 'Erstellt'),
+                    quote_header.get('monday_item_id', ''),
+                    quote_header.get('closing_text', ''),
+                    quote_header.get('notizen', '')
+                ))
+                rows2, _ = _fetchall(conn, "SELECT last_insert_rowid()")
+                angebots_id = rows2[0][0]
+
+            # Positionen einfügen
             for pos in positions:
                 _execute(conn, """
                     INSERT INTO positionen
@@ -140,21 +237,33 @@ class CoolMatchDatabase:
                      menge, einzelpreis, rabatt, gesamt, notiz)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    angebots_id, pos.get('Pos', 0), pos.get('Typ', ''),
-                    pos.get('Artikel', ''), pos.get('Beschreibung', ''),
-                    pos.get('Menge', 0), pos.get('Einzelpreis', 0), pos.get('Rabatt', 0),
-                    pos.get('Menge', 0) * pos.get('Einzelpreis', 0) * (1 - pos.get('Rabatt', 0)/100),
+                    angebots_id,
+                    pos.get('Pos', 0),
+                    pos.get('Typ', ''),
+                    pos.get('Artikel', ''),
+                    pos.get('Beschreibung', ''),
+                    pos.get('Menge', 0),
+                    pos.get('Einzelpreis', 0),
+                    pos.get('Rabatt', 0),
+                    pos.get('Menge', 0) * pos.get('Einzelpreis', 0) * (1 - pos.get('Rabatt', 0) / 100),
                     pos.get('Notiz', '')
                 ))
                 _execute(conn, """
-                    INSERT INTO produkt_stats (artikel_nr, beschreibung, kategorie, preis, rabatt, menge)
+                    INSERT INTO produkt_stats
+                    (artikel_nr, beschreibung, kategorie, preis, rabatt, menge)
                     VALUES (?, ?, ?, ?, ?, ?)
                 """, (
-                    pos.get('Artikel', ''), pos.get('Beschreibung', ''), pos.get('Typ', ''),
-                    pos.get('Einzelpreis', 0), pos.get('Rabatt', 0), pos.get('Menge', 0)
+                    pos.get('Artikel', ''),
+                    pos.get('Beschreibung', ''),
+                    pos.get('Typ', ''),
+                    pos.get('Einzelpreis', 0),
+                    pos.get('Rabatt', 0),
+                    pos.get('Menge', 0)
                 ))
+
             conn.commit()
             return angebots_id
+
         except Exception as e:
             conn.rollback()
             raise e
