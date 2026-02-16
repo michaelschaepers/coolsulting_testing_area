@@ -591,11 +591,21 @@ def render_cart_tab(mwst, validity, p_firma, p_name, p_strasse, p_ort,
 # ==========================================
 # PDF & SPEICHERN
 # ==========================================
+# ==========================================
+# PDF & SPEICHERN - FIXED VERSION
+# ==========================================
 def create_pdf_and_save(calc_df, p_firma, p_name, p_strasse, p_ort, p_email, p_tel, p_agb,
                        c_name, c_ref, c_nr, mwst, validity,
                        zwischensumme, rab_proz, rab_abs,
                        netto, ust, brutto, manual_active, hide_prices):
-    """Erstellt PDF und bietet Download an"""
+    """
+    Erstellt PDF und speichert AUTOMATISCH in DB + Monday.com
+    
+    ÄNDERUNGEN v7.1:
+    - Automatischer DB-Save
+    - Automatischer Monday.com Upload mit PDF
+    - Keine separaten Buttons mehr nötig
+    """
     
     try:
         # Partner & Kunde Daten
@@ -632,41 +642,123 @@ def create_pdf_and_save(calc_df, p_firma, p_name, p_strasse, p_ort, p_email, p_t
         }
         
         # PDF generieren
-        pdf_bytes = generate_pdf(
-            calc_df, partner_data, customer_data,
-            financial_data, options, st.session_state.closing_text
-        )
-        
-        # Download Button
-        st.download_button(
-            "⬇️ PDF herunterladen",
-            pdf_bytes,
-            f"AN_{c_nr}.pdf",
-            "application/pdf",
-            use_container_width=True
-        )
+        with st.spinner("📄 Erstelle PDF..."):
+            pdf_bytes = generate_pdf(
+                calc_df, partner_data, customer_data,
+                financial_data, options, st.session_state.closing_text
+            )
         
         st.success("✅ PDF erfolgreich erstellt!")
         
-        # Optional: Monday.com
-        if st.session_state.monday.is_configured():
-            if st.checkbox("📤 Auch in Monday.com speichern?"):
-                monday_data = {
+        # 1. AUTOMATISCH IN DATENBANK SPEICHERN
+        try:
+            with st.spinner("💾 Speichere in Datenbank..."):
+                valid_until = (datetime.now() + timedelta(days=validity)).strftime("%Y-%m-%d")
+                
+                quote_header = {
                     'angebots_nr': c_nr,
-                    'datum': datetime.now(),
-                    'angebotswert': brutto,
-                    'partner': p_firma,
-                    'plz': extract_plz(p_ort)
+                    'kunde_name': c_name,
+                    'kunde_projekt': c_ref,
+                    'kunde_nr': '',
+                    'gueltig_bis': valid_until,
+                    'bearbeiter': p_name,
+                    'firma': p_firma,
+                    'summe_netto': netto,
+                    'summe_brutto': brutto,
+                    'mwst_satz': mwst,
+                    'rabatt_prozent': rab_proz,
+                    'rabatt_absolut': rab_abs,
+                    'manual_preis': manual_active,
+                    'preise_verborgen': hide_prices,
+                    'status': 'Erstellt',
+                    'monday_item_id': '',  # Wird gleich aktualisiert
+                    'closing_text': st.session_state.closing_text,
+                    'notizen': ''
                 }
-                save_quote_to_monday_ui(monday_data)
+                
+                db = st.session_state.db
+                angebots_id = db.save_quote(quote_header, st.session_state.cart)
+                
+                st.success(f"✅ In Datenbank gespeichert! (ID: {angebots_id})")
+        
+        except Exception as e:
+            st.warning(f"⚠️ DB-Speicherung fehlgeschlagen: {e}")
+        
+        # 2. AUTOMATISCH IN MONDAY.COM SPEICHERN (wenn konfiguriert)
+        monday_item_id = ""
+        if st.session_state.monday.is_configured():
+            try:
+                with st.spinner("📤 Lade zu Monday.com hoch..."):
+                    monday_data = {
+                        'angebots_nr': c_nr,
+                        'datum': datetime.now(),
+                        'angebotswert': brutto,  # Brutto-Wert
+                        'partner': p_firma,
+                        'plz': extract_plz(p_ort),
+                        'kunde': c_name  # Für Item Name falls angebots_nr fehlt
+                    }
+                    
+                    # PDF-Dateiname
+                    pdf_filename = f"AN_{c_nr.replace('/', '_').replace(' ', '_')}.pdf"
+                    
+                    # Upload mit PDF
+                    success, monday_item_id = st.session_state.monday.save_quote_to_monday(
+                        monday_data, 
+                        pdf_bytes,
+                        pdf_filename
+                    )
+                    
+                    if success:
+                        st.success(f"✅ In Monday.com gespeichert! (Item: {monday_item_id})")
+                        
+                        # Monday Item ID in DB aktualisieren
+                        try:
+                            db.update_monday_id(c_nr, monday_item_id)
+                        except:
+                            pass
+                    else:
+                        st.warning("⚠️ Monday.com Upload fehlgeschlagen (siehe Logs)")
+            
+            except Exception as e:
+                st.warning(f"⚠️ Monday.com Fehler: {e}")
+        else:
+            st.info("ℹ️ Monday.com nicht konfiguriert - nur DB-Speicherung")
+        
+        # 3. PDF DOWNLOAD BUTTON
+        st.download_button(
+            "⬇️ PDF herunterladen",
+            pdf_bytes,
+            f"AN_{c_nr.replace('/', '_').replace(' ', '_')}.pdf",
+            "application/pdf",
+            use_container_width=True,
+            key="pdf_download_btn"
+        )
+        
+        # Info-Box
+        st.info("""
+        **✅ Workflow abgeschlossen:**
+        - PDF erstellt
+        - In Datenbank gespeichert
+        - In Monday.com hochgeladen (inkl. PDF)
+        
+        Jetzt kannst du das PDF herunterladen oder ein neues Angebot starten.
+        """)
         
     except Exception as e:
-        st.error(f"❌ PDF-Fehler: {e}")
+        st.error(f"❌ Fehler: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+
 
 def save_to_database(c_name, c_ref, c_nr, bearbeiter, firma, validity,
                     netto, brutto, mwst, rab_proz, rab_abs,
                     manual_active, hide_prices, cart):
-    """Speichert Angebot in Datenbank"""
+    """
+    Speichert Angebot in Datenbank (DEPRECATED - wird von create_pdf_and_save erledigt)
+    
+    Diese Funktion wird nicht mehr direkt aufgerufen, da die DB-Speicherung
+    jetzt automatisch beim PDF-Download erfolgt.
+    """
     
     try:
         valid_until = (datetime.now() + timedelta(days=validity)).strftime("%Y-%m-%d")
