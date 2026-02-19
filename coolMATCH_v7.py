@@ -1,4 +1,3 @@
-
 # ==========================================
 # DATEI: coolMATCH_v7.py
 # VERSION: 7.0
@@ -108,26 +107,9 @@ def add_to_cart(typ, art_nr, bez, menge, preis, rabatt, note=""):
     })
 
 def generate_angebots_nr():
-    """
-    Generiert laufende Angebots-Nummer aus der Datenbank.
-    Format: AN-JJJJ-NNNN (z.B. AN-2026-0001)
-    FIX: Nummer wird in Session State gecacht → keine Duplikate bei Reruns.
-    """
-    # Wenn schon eine Nummer für diese Sitzung generiert wurde → dieselbe zurückgeben
-    if 'current_angebots_nr' in st.session_state and st.session_state.current_angebots_nr:
-        return st.session_state.current_angebots_nr
-    try:
-        if 'db' in st.session_state and st.session_state.db is not None:
-            nr = st.session_state.db.get_next_angebots_nr()
-            st.session_state.current_angebots_nr = nr
-            return nr
-    except Exception:
-        pass
-    # Fallback
-    year = datetime.now().strftime("%Y")
-    nr = f"AN-{year}-{datetime.now().strftime('%H%M')}"
-    st.session_state.current_angebots_nr = nr
-    return nr
+    """Generiert automatische Angebots-Nummer"""
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M")
+    return f"AN-{timestamp}"
 
 def extract_plz(ort_str):
     """Extrahiert PLZ aus Ort-String (z.B. '4020 Linz' -> '4020')"""
@@ -145,7 +127,7 @@ def main():
         st.set_page_config(page_title=f"{APP_NAME} v{APP_VERSION}", layout="wide")
         st.session_state.page_configured = True
 
-    # Session State initialisieren (DB ZUERST - wird von generate_angebots_nr gebraucht!)
+    # Session State initialisieren
     if 'cart' not in st.session_state:
         st.session_state.cart = []
     
@@ -609,21 +591,11 @@ def render_cart_tab(mwst, validity, p_firma, p_name, p_strasse, p_ort,
 # ==========================================
 # PDF & SPEICHERN
 # ==========================================
-# ==========================================
-# PDF & SPEICHERN - FIXED VERSION
-# ==========================================
 def create_pdf_and_save(calc_df, p_firma, p_name, p_strasse, p_ort, p_email, p_tel, p_agb,
                        c_name, c_ref, c_nr, mwst, validity,
                        zwischensumme, rab_proz, rab_abs,
                        netto, ust, brutto, manual_active, hide_prices):
-    """
-    Erstellt PDF und speichert AUTOMATISCH in DB + Monday.com
-    
-    ÄNDERUNGEN v7.1:
-    - Automatischer DB-Save
-    - Automatischer Monday.com Upload mit PDF
-    - Keine separaten Buttons mehr nötig
-    """
+    """Erstellt PDF und bietet Download an"""
     
     try:
         # Partner & Kunde Daten
@@ -660,187 +632,41 @@ def create_pdf_and_save(calc_df, p_firma, p_name, p_strasse, p_ort, p_email, p_t
         }
         
         # PDF generieren
-        with st.spinner("📄 Erstelle PDF..."):
-            pdf_bytes = generate_pdf(
-                calc_df, partner_data, customer_data,
-                financial_data, options, st.session_state.closing_text
-            )
+        pdf_bytes = generate_pdf(
+            calc_df, partner_data, customer_data,
+            financial_data, options, st.session_state.closing_text
+        )
         
-        st.success("✅ PDF erfolgreich erstellt!")
-        
-        # 1. AUTOMATISCH IN DATENBANK SPEICHERN
-        try:
-            with st.spinner("💾 Speichere in Datenbank..."):
-                valid_until = (datetime.now() + timedelta(days=validity)).strftime("%Y-%m-%d")
-                
-                quote_header = {
-                    'angebots_nr': c_nr,
-                    'kunde_name': c_name,
-                    'kunde_projekt': c_ref,
-                    'kunde_nr': '',
-                    'gueltig_bis': valid_until,
-                    'bearbeiter': p_name,
-                    'firma': p_firma,
-                    'summe_netto': netto,
-                    'summe_brutto': brutto,
-                    'mwst_satz': mwst,
-                    'rabatt_prozent': rab_proz,
-                    'rabatt_absolut': rab_abs,
-                    'manual_preis': manual_active,
-                    'preise_verborgen': hide_prices,
-                    'status': 'Erstellt',
-                    'monday_item_id': '',  # Wird gleich aktualisiert
-                    'closing_text': st.session_state.closing_text,
-                    'notizen': ''
-                }
-                
-                db = st.session_state.db
-                angebots_id = db.save_quote(quote_header, st.session_state.cart)
-                
-                st.success(f"✅ In Datenbank gespeichert! (ID: {angebots_id})")
-        
-        except Exception as e:
-            st.warning(f"⚠️ DB-Speicherung fehlgeschlagen: {e}")
-        
-        # 2. AUTOMATISCH IN MONDAY.COM SPEICHERN (wenn konfiguriert)
-        monday_item_id = ""
-        if st.session_state.monday.is_configured():
-            try:
-                with st.spinner("📤 Lade zu Monday.com hoch..."):
-                    monday_data = {
-                        'angebots_nr': c_nr,
-                        'datum': datetime.now(),
-                        'angebotswert': brutto,  # Brutto-Wert
-                        'partner': p_firma,
-                        'plz': extract_plz(p_ort),
-                        'kunde': c_name  # Für Item Name falls angebots_nr fehlt
-                    }
-                    
-                    # PDF-Dateiname
-                    pdf_filename = f"AN_{c_nr.replace('/', '_').replace(' ', '_')}.pdf"
-                    
-                    # Upload mit PDF
-                    success, monday_item_id = st.session_state.monday.save_quote_to_monday(
-                        monday_data, 
-                        pdf_bytes,
-                        pdf_filename
-                    )
-                    
-                    if success:
-                        st.success(f"✅ In Monday.com gespeichert! (Item: {monday_item_id})")
-                        
-                        # Monday Item ID in DB aktualisieren
-                        try:
-                            db.update_monday_id(c_nr, monday_item_id)
-                        except:
-                            pass
-                    else:
-                        st.warning("⚠️ Monday.com Upload fehlgeschlagen (siehe Logs)")
-                        # DEBUG: Direkt testen was Monday zurückgibt
-                        with st.expander("🔍 Monday.com Debug Info"):
-                            import requests, json
-                            headers = {
-                                "Authorization": st.session_state.monday.api_token,
-                                "Content-Type": "application/json"
-                            }
-                            # Test 1: Verbindung
-                            r = requests.post("https://api.monday.com/v2",
-                                headers=headers,
-                                json={"query": "query { me { name email } }"},
-                                timeout=10)
-                            st.write("**Verbindungstest:**", r.status_code, r.json())
-
-                            # Test 2: Item mit ALLEN Feldern wie save_quote_to_monday
-                            cv_full = {
-                                "date_mknqdvj8": {"date": "2026-02-16"},
-                                "numeric_mknst7mm": str(round(float(brutto), 2)),
-                                "dropdown_mknagc5a": {"labels": [str(p_firma)]},
-                                "text_mkn9v26m": extract_plz(p_ort),
-                                "color_mkncgyk5": {"label": "Angebot"}
-                            }
-                            cv_escaped = json.dumps(cv_full).replace("\\", "\\\\").replace('"', '\\"')
-                            q_full = f'mutation {{ create_item (board_id: {st.session_state.monday.board_id}, item_name: "DEBUG_FULL_{c_nr}", column_values: "{cv_escaped}") {{ id }} }}'
-                            r_full = requests.post("https://api.monday.com/v2",
-                                headers=headers,
-                                json={"query": q_full},
-                                timeout=10)
-                            st.write("**Item mit allen Feldern:**", r_full.status_code)
-                            st.json(r_full.json())
-
-                            # Test 3: PDF Upload testen (wenn Item erstellt)
-                            full_data = r_full.json()
-                            if 'data' in full_data and full_data['data'] and 'create_item' in full_data['data']:
-                                test_item_id = full_data['data']['create_item']['id']
-                                st.write(f"**Item ID:** {test_item_id} → teste PDF Upload...")
-                                
-                                # Minimales Test-PDF
-                                test_pdf = b"%PDF-1.4 test"
-                                upload_headers = {"Authorization": st.session_state.monday.api_token}
-                                query_upload = '''
-                                mutation ($file: File!, $itemId: ID!, $columnId: String!) {
-                                    add_file_to_column (file: $file, item_id: $itemId, column_id: $columnId) { id name }
-                                }'''
-                                variables = {"itemId": int(test_item_id), "columnId": "file_mkngj4yq"}
-                                map_data = {"image": ["variables.file"]}
-                                files = {
-                                    'query': (None, query_upload),
-                                    'variables': (None, json.dumps(variables)),
-                                    'map': (None, json.dumps(map_data)),
-                                    'image': ("test.pdf", test_pdf, 'application/pdf')
-                                }
-                                r_upload = requests.post(
-                                    "https://api.monday.com/v2/file",
-                                    headers=upload_headers,
-                                    files=files,
-                                    timeout=30
-                                )
-                                st.write("**PDF Upload:**", r_upload.status_code)
-                                st.json(r_upload.json())
-            
-            except Exception as e:
-                st.warning(f"⚠️ Monday.com Fehler: {e}")
-        else:
-            st.info("ℹ️ Monday.com nicht konfiguriert - nur DB-Speicherung")
-        
-        # 3. PDF DOWNLOAD BUTTON
+        # Download Button
         st.download_button(
             "⬇️ PDF herunterladen",
             pdf_bytes,
-            f"AN_{c_nr.replace('/', '_').replace(' ', '_')}.pdf",
+            f"AN_{c_nr}.pdf",
             "application/pdf",
-            use_container_width=True,
-            key="pdf_download_btn"
+            use_container_width=True
         )
         
-        # Info-Box
-        st.info("""
-        **✅ Workflow abgeschlossen:**
-        - PDF erstellt
-        - In Datenbank gespeichert
-        - In Monday.com hochgeladen (inkl. PDF)
+        st.success("✅ PDF erfolgreich erstellt!")
         
-        Jetzt kannst du das PDF herunterladen oder ein neues Angebot starten.
-        """)
-        
-        # Nummer für nächstes Angebot zurücksetzen
-        if 'current_angebots_nr' in st.session_state:
-            del st.session_state.current_angebots_nr
+        # Optional: Monday.com
+        if st.session_state.monday.is_configured():
+            if st.checkbox("📤 Auch in Monday.com speichern?"):
+                monday_data = {
+                    'angebots_nr': c_nr,
+                    'datum': datetime.now(),
+                    'angebotswert': brutto,
+                    'partner': p_firma,
+                    'plz': extract_plz(p_ort)
+                }
+                save_quote_to_monday_ui(monday_data)
         
     except Exception as e:
-        st.error(f"❌ Fehler: {e}")
-        import traceback
-        st.code(traceback.format_exc())
-
+        st.error(f"❌ PDF-Fehler: {e}")
 
 def save_to_database(c_name, c_ref, c_nr, bearbeiter, firma, validity,
                     netto, brutto, mwst, rab_proz, rab_abs,
                     manual_active, hide_prices, cart):
-    """
-    Speichert Angebot in Datenbank (DEPRECATED - wird von create_pdf_and_save erledigt)
-    
-    Diese Funktion wird nicht mehr direkt aufgerufen, da die DB-Speicherung
-    jetzt automatisch beim PDF-Download erfolgt.
-    """
+    """Speichert Angebot in Datenbank"""
     
     try:
         valid_until = (datetime.now() + timedelta(days=validity)).strftime("%Y-%m-%d")

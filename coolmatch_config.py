@@ -56,7 +56,8 @@ DEFAULT_PARTNER = {
 }
 
 # --- PRODUKTDATEIEN ---
-SAMSUNG_FILE_KEYWORDS = ["Samsung"]
+# Samsung Preisliste: S_Klima_Artikel_Import_*.xlsx
+SAMSUNG_FILE_KEYWORDS = ["S_Klima", "Samsung"]
 ZUBEHOER_FILE_KEYWORDS = ["ubeh", "zubeh"]
 
 # --- SAMSUNG KATEGORIEN ---

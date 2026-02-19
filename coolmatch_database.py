@@ -1,61 +1,31 @@
 # ==========================================
 # DATEI: coolmatch_database.py
-# VERSION: 7.2 - FIXED UNIQUE CONSTRAINT + LAUFENDE NUMMER
+# VERSION: 7.0
 # AUTOR: Michael Schäpers, coolsulting
-# FIXES:
-#   - get_next_angebots_nr(): Laufende Nummer aus DB (verhindert Duplikate)
-#   - save_quote(): INSERT OR UPDATE (verhindert UNIQUE constraint Fehler)
+# BESCHREIBUNG: SQLite Datenbank für coolMATCH Angebote
 # ==========================================
 
+import sqlite3
 import pandas as pd
 from datetime import datetime
 from typing import List, Dict, Optional
-import streamlit as st
-
-
-def _get_connection():
-    """Turso wenn Secrets vorhanden, sonst lokale SQLite"""
-    try:
-        turso_url = st.secrets.get("TURSO_URL", "")
-        turso_token = st.secrets.get("TURSO_TOKEN", "")
-    except Exception:
-        turso_url = ""
-        turso_token = ""
-
-    if turso_url and turso_token:
-        import libsql_experimental as libsql
-        conn = libsql.connect(database=turso_url, auth_token=turso_token)
-        return conn, "turso"
-    else:
-        import sqlite3, os, tempfile
-        data_dir = os.path.join(tempfile.gettempdir(), "coolmatch_data")
-        os.makedirs(data_dir, exist_ok=True)
-        conn = sqlite3.connect(os.path.join(data_dir, "coolmatch_database.db"))
-        return conn, "sqlite"
-
-
-def _fetchall(conn, sql, params=()):
-    cur = conn.cursor()
-    cur.execute(sql, params)
-    return cur.fetchall(), cur.description
-
-
-def _execute(conn, sql, params=()):
-    cur = conn.cursor()
-    cur.execute(sql, params)
-    return cur
-
+import json
 
 class CoolMatchDatabase:
-    """Verwaltet alle Angebots-Daten in SQLite / Turso"""
-
-    def __init__(self, db_path: str = None):
+    """Verwaltet alle Angebots-Daten in SQLite"""
+    
+    def __init__(self, db_path: str = "coolmatch_database.db"):
+        self.db_path = db_path
         self.init_database()
-
+    
     def init_database(self):
-        conn, mode = _get_connection()
-        sqls = [
-            """CREATE TABLE IF NOT EXISTS angebote (
+        """Erstellt Datenbank-Schema"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Tabelle: Angebote
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS angebote (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 angebots_nr TEXT UNIQUE NOT NULL,
                 kunde_name TEXT NOT NULL,
@@ -76,162 +46,100 @@ class CoolMatchDatabase:
                 monday_item_id TEXT,
                 closing_text TEXT,
                 notizen TEXT
-            )""",
-            """CREATE TABLE IF NOT EXISTS positionen (
+            )
+        """)
+        
+        # Tabelle: Positionen
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS positionen (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 angebots_id INTEGER NOT NULL,
                 position_nr INTEGER NOT NULL,
-                typ TEXT, artikel_nr TEXT, beschreibung TEXT,
-                menge REAL, einzelpreis REAL, rabatt REAL, gesamt REAL, notiz TEXT,
+                typ TEXT,
+                artikel_nr TEXT,
+                beschreibung TEXT,
+                menge REAL,
+                einzelpreis REAL,
+                rabatt REAL,
+                gesamt REAL,
+                notiz TEXT,
                 FOREIGN KEY (angebots_id) REFERENCES angebote(id) ON DELETE CASCADE
-            )""",
-            """CREATE TABLE IF NOT EXISTS produkt_stats (
+            )
+        """)
+        
+        # Tabelle: Produkt-Stats (für Analytics)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS produkt_stats (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                artikel_nr TEXT NOT NULL, beschreibung TEXT, kategorie TEXT,
-                preis REAL, rabatt REAL, menge REAL,
+                artikel_nr TEXT NOT NULL,
+                beschreibung TEXT,
+                kategorie TEXT,
+                preis REAL,
+                rabatt REAL,
+                menge REAL,
                 datum DATETIME DEFAULT CURRENT_TIMESTAMP
-            )""",
-            "CREATE INDEX IF NOT EXISTS idx_angebots_nr ON angebote(angebots_nr)",
-            "CREATE INDEX IF NOT EXISTS idx_kunde ON angebote(kunde_name)",
-            "CREATE INDEX IF NOT EXISTS idx_datum ON angebote(erstellt_am)",
-            "CREATE INDEX IF NOT EXISTS idx_status ON angebote(status)",
-            "CREATE INDEX IF NOT EXISTS idx_artikel ON produkt_stats(artikel_nr)",
-        ]
-        for sql in sqls:
-            try:
-                _execute(conn, sql)
-            except Exception:
-                pass
+            )
+        """)
+        
+        # Indizes
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_angebots_nr ON angebote(angebots_nr)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_kunde ON angebote(kunde_name)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_datum ON angebote(erstellt_am)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_status ON angebote(status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_artikel ON produkt_stats(artikel_nr)")
+        
         conn.commit()
         conn.close()
-
-    def _query_to_df(self, sql, params=()):
-        conn, mode = _get_connection()
-        rows, desc = _fetchall(conn, sql, params)
-        conn.close()
-        if desc:
-            return pd.DataFrame(rows, columns=[d[0] for d in desc])
-        return pd.DataFrame()
-
-    # ============================================================
-    # FIX: Laufende Angebotsnummer aus Datenbank generieren
-    # Verhindert UNIQUE constraint durch echte Sequenz aus DB
-    # ============================================================
-    def get_next_angebots_nr(self) -> str:
-        """
-        Generiert die nächste laufende Angebotsnummer.
-        Format: AN-JJJJ-NNNN (z.B. AN-2026-0001)
-
-        Liest den höchsten aktuellen Wert direkt aus der DB →
-        keine Duplikate, auch bei mehreren Tabs/Sessions.
-        """
-        year = datetime.now().strftime("%Y")
-        conn, mode = _get_connection()
-        try:
-            rows, _ = _fetchall(
-                conn,
-                "SELECT angebots_nr FROM angebote WHERE angebots_nr LIKE ? ORDER BY angebots_nr DESC LIMIT 1",
-                (f"AN-{year}-%",)
-            )
-            if rows:
-                last_nr = rows[0][0]          # z.B. "AN-2026-0215"
-                try:
-                    last_seq = int(last_nr.split("-")[-1])
-                    next_seq = last_seq + 1
-                except ValueError:
-                    next_seq = 1
-            else:
-                next_seq = 1
-            return f"AN-{year}-{next_seq:04d}"
-        finally:
-            conn.close()
-
-    # ============================================================
-    # FIX: save_quote mit INSERT OR UPDATE (kein Duplikat-Fehler)
-    # ============================================================
+    
     def save_quote(self, quote_header: Dict, positions: List[Dict]) -> int:
         """
-        Speichert Angebot. Bei bereits vorhandener angebots_nr → UPDATE statt INSERT.
-        Verhindert: SQLite error: UNIQUE constraint failed: angebote.angebots_nr
+        Speichert komplettes Angebot
+        
+        Args:
+            quote_header: Kopfdaten des Angebots
+            positions: Liste mit Positionen
+            
+        Returns:
+            Angebots-ID in Datenbank
         """
-        conn, mode = _get_connection()
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
         try:
-            # Prüfen ob Angebotsnummer schon existiert
-            existing_rows, _ = _fetchall(
-                conn,
-                "SELECT id FROM angebote WHERE angebots_nr = ?",
-                (quote_header['angebots_nr'],)
-            )
-
-            if existing_rows:
-                # ── UPDATE vorhandenen Datensatz ──
-                angebots_id = existing_rows[0][0]
-                _execute(conn, """
-                    UPDATE angebote SET
-                        kunde_name=?, kunde_projekt=?, kunde_nr=?, gueltig_bis=?,
-                        bearbeiter=?, firma=?, summe_netto=?, summe_brutto=?,
-                        mwst_satz=?, rabatt_prozent=?, rabatt_absolut=?,
-                        manual_preis=?, preise_verborgen=?, status=?,
-                        monday_item_id=?, closing_text=?, notizen=?
-                    WHERE id=?
-                """, (
-                    quote_header['kunde_name'],
-                    quote_header.get('kunde_projekt', ''),
-                    quote_header.get('kunde_nr', ''),
-                    quote_header.get('gueltig_bis', ''),
-                    quote_header.get('bearbeiter', ''),
-                    quote_header.get('firma', ''),
-                    quote_header['summe_netto'],
-                    quote_header['summe_brutto'],
-                    quote_header['mwst_satz'],
-                    quote_header.get('rabatt_prozent', 0),
-                    quote_header.get('rabatt_absolut', 0),
-                    quote_header.get('manual_preis', 0),
-                    quote_header.get('preise_verborgen', 0),
-                    quote_header.get('status', 'Erstellt'),
-                    quote_header.get('monday_item_id', ''),
-                    quote_header.get('closing_text', ''),
-                    quote_header.get('notizen', ''),
-                    angebots_id
-                ))
-                # Alte Positionen löschen (werden unten neu geschrieben)
-                _execute(conn, "DELETE FROM positionen WHERE angebots_id = ?", (angebots_id,))
-
-            else:
-                # ── INSERT neuer Datensatz ──
-                _execute(conn, """
-                    INSERT INTO angebote
-                    (angebots_nr, kunde_name, kunde_projekt, kunde_nr, gueltig_bis,
-                     bearbeiter, firma, summe_netto, summe_brutto, mwst_satz,
-                     rabatt_prozent, rabatt_absolut, manual_preis, preise_verborgen,
-                     status, monday_item_id, closing_text, notizen)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    quote_header['angebots_nr'],
-                    quote_header['kunde_name'],
-                    quote_header.get('kunde_projekt', ''),
-                    quote_header.get('kunde_nr', ''),
-                    quote_header.get('gueltig_bis', ''),
-                    quote_header.get('bearbeiter', ''),
-                    quote_header.get('firma', ''),
-                    quote_header['summe_netto'],
-                    quote_header['summe_brutto'],
-                    quote_header['mwst_satz'],
-                    quote_header.get('rabatt_prozent', 0),
-                    quote_header.get('rabatt_absolut', 0),
-                    quote_header.get('manual_preis', 0),
-                    quote_header.get('preise_verborgen', 0),
-                    quote_header.get('status', 'Erstellt'),
-                    quote_header.get('monday_item_id', ''),
-                    quote_header.get('closing_text', ''),
-                    quote_header.get('notizen', '')
-                ))
-                rows2, _ = _fetchall(conn, "SELECT last_insert_rowid()")
-                angebots_id = rows2[0][0]
-
-            # Positionen einfügen
+            # Header speichern
+            cursor.execute("""
+                INSERT INTO angebote 
+                (angebots_nr, kunde_name, kunde_projekt, kunde_nr, gueltig_bis, 
+                 bearbeiter, firma, summe_netto, summe_brutto, mwst_satz,
+                 rabatt_prozent, rabatt_absolut, manual_preis, preise_verborgen,
+                 status, monday_item_id, closing_text, notizen)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                quote_header['angebots_nr'],
+                quote_header['kunde_name'],
+                quote_header.get('kunde_projekt', ''),
+                quote_header.get('kunde_nr', ''),
+                quote_header.get('gueltig_bis', ''),
+                quote_header.get('bearbeiter', ''),
+                quote_header.get('firma', ''),
+                quote_header['summe_netto'],
+                quote_header['summe_brutto'],
+                quote_header['mwst_satz'],
+                quote_header.get('rabatt_prozent', 0),
+                quote_header.get('rabatt_absolut', 0),
+                quote_header.get('manual_preis', 0),
+                quote_header.get('preise_verborgen', 0),
+                quote_header.get('status', 'Erstellt'),
+                quote_header.get('monday_item_id', ''),
+                quote_header.get('closing_text', ''),
+                quote_header.get('notizen', '')
+            ))
+            
+            angebots_id = cursor.lastrowid
+            
+            # Positionen speichern
             for pos in positions:
-                _execute(conn, """
+                cursor.execute("""
                     INSERT INTO positionen
                     (angebots_id, position_nr, typ, artikel_nr, beschreibung,
                      menge, einzelpreis, rabatt, gesamt, notiz)
@@ -245,12 +153,13 @@ class CoolMatchDatabase:
                     pos.get('Menge', 0),
                     pos.get('Einzelpreis', 0),
                     pos.get('Rabatt', 0),
-                    pos.get('Menge', 0) * pos.get('Einzelpreis', 0) * (1 - pos.get('Rabatt', 0) / 100),
+                    pos.get('Menge', 0) * pos.get('Einzelpreis', 0) * (1 - pos.get('Rabatt', 0)/100),
                     pos.get('Notiz', '')
                 ))
-                _execute(conn, """
-                    INSERT INTO produkt_stats
-                    (artikel_nr, beschreibung, kategorie, preis, rabatt, menge)
+                
+                # Produkt-Stats aktualisieren
+                cursor.execute("""
+                    INSERT INTO produkt_stats (artikel_nr, beschreibung, kategorie, preis, rabatt, menge)
                     VALUES (?, ?, ?, ?, ?, ?)
                 """, (
                     pos.get('Artikel', ''),
@@ -260,111 +169,193 @@ class CoolMatchDatabase:
                     pos.get('Rabatt', 0),
                     pos.get('Menge', 0)
                 ))
-
+            
             conn.commit()
             return angebots_id
-
+            
         except Exception as e:
             conn.rollback()
             raise e
         finally:
             conn.close()
-
+    
     def get_all_quotes(self, limit: int = None) -> pd.DataFrame:
-        sql = "SELECT * FROM angebote ORDER BY erstellt_am DESC"
+        """Lädt alle Angebote"""
+        conn = sqlite3.connect(self.db_path)
+        query = "SELECT * FROM angebote ORDER BY erstellt_am DESC"
         if limit:
-            sql += f" LIMIT {limit}"
-        return self._query_to_df(sql)
-
+            query += f" LIMIT {limit}"
+        df = pd.read_sql_query(query, conn)
+        conn.close()
+        return df
+    
     def get_quote_by_nr(self, angebots_nr: str) -> Optional[Dict]:
-        conn, mode = _get_connection()
-        rows, _ = _fetchall(conn, "SELECT * FROM angebote WHERE angebots_nr = ?", (angebots_nr,))
-        if not rows:
+        """Lädt spezifisches Angebot mit Positionen"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM angebote WHERE angebots_nr = ?", (angebots_nr,))
+        header = cursor.fetchone()
+        
+        if not header:
             conn.close()
             return None
-        header = rows[0]
-        pos_rows, _ = _fetchall(conn,
-            "SELECT * FROM positionen WHERE angebots_id = ? ORDER BY position_nr", (header[0],))
+        
+        cursor.execute("""
+            SELECT * FROM positionen 
+            WHERE angebots_id = ? 
+            ORDER BY position_nr
+        """, (header[0],))
+        
+        positions = cursor.fetchall()
         conn.close()
-        return {'header': header, 'positions': pos_rows}
-
+        
+        return {'header': header, 'positions': positions}
+    
     def get_statistics(self) -> Dict:
-        conn, mode = _get_connection()
-        rows, _ = _fetchall(conn, """
-            SELECT COUNT(*), SUM(summe_brutto), AVG(summe_brutto),
-                   MIN(summe_brutto), MAX(summe_brutto) FROM angebote
+        """Berechnet Statistiken"""
+        conn = sqlite3.connect(self.db_path)
+        stats = {}
+        
+        # Gesamt-Statistiken
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT 
+                COUNT(*) as anzahl,
+                SUM(summe_brutto) as gesamt_brutto,
+                AVG(summe_brutto) as durchschnitt_brutto,
+                MIN(summe_brutto) as min_brutto,
+                MAX(summe_brutto) as max_brutto
+            FROM angebote
         """)
-        row = rows[0]
+        
+        row = cursor.fetchone()
+        stats['gesamt'] = {
+            'anzahl': row[0],
+            'summe': row[1] or 0,
+            'durchschnitt': row[2] or 0,
+            'min': row[3] or 0,
+            'max': row[4] or 0
+        }
+        
+        # Monatliche Auswertung
+        stats['monthly'] = pd.read_sql_query("""
+            SELECT 
+                strftime('%Y-%m', erstellt_am) as monat,
+                COUNT(*) as anzahl,
+                SUM(summe_brutto) as summe
+            FROM angebote
+            GROUP BY monat
+            ORDER BY monat DESC
+            LIMIT 12
+        """, conn)
+        
+        # Top Produkte
+        stats['top_products'] = pd.read_sql_query("""
+            SELECT 
+                artikel_nr,
+                beschreibung,
+                kategorie,
+                COUNT(*) as anzahl,
+                SUM(menge) as gesamt_menge,
+                AVG(preis) as durchschnittspreis,
+                AVG(rabatt) as durchschnittsrabatt
+            FROM produkt_stats
+            GROUP BY artikel_nr
+            ORDER BY anzahl DESC
+            LIMIT 15
+        """, conn)
+        
+        # Kategorie-Verteilung
+        stats['categories'] = pd.read_sql_query("""
+            SELECT 
+                kategorie,
+                COUNT(*) as anzahl,
+                SUM(menge * preis * (1 - rabatt/100)) as umsatz
+            FROM produkt_stats
+            WHERE kategorie != ''
+            GROUP BY kategorie
+            ORDER BY umsatz DESC
+        """, conn)
+        
+        # Status-Verteilung
+        stats['status'] = pd.read_sql_query("""
+            SELECT 
+                status,
+                COUNT(*) as anzahl,
+                SUM(summe_brutto) as summe
+            FROM angebote
+            GROUP BY status
+        """, conn)
+        
         conn.close()
-        stats = {'gesamt': {
-            'anzahl': row[0] or 0, 'summe': row[1] or 0,
-            'durchschnitt': row[2] or 0, 'min': row[3] or 0, 'max': row[4] or 0
-        }}
-        stats['monthly'] = self._query_to_df("""
-            SELECT strftime('%Y-%m', erstellt_am) as monat,
-                   COUNT(*) as anzahl, SUM(summe_brutto) as summe
-            FROM angebote GROUP BY monat ORDER BY monat DESC LIMIT 12
-        """)
-        stats['top_products'] = self._query_to_df("""
-            SELECT artikel_nr, beschreibung, kategorie, COUNT(*) as anzahl,
-                   SUM(menge) as gesamt_menge, AVG(preis) as durchschnittspreis,
-                   AVG(rabatt) as durchschnittsrabatt
-            FROM produkt_stats GROUP BY artikel_nr ORDER BY anzahl DESC LIMIT 15
-        """)
-        stats['categories'] = self._query_to_df("""
-            SELECT kategorie, COUNT(*) as anzahl,
-                   SUM(menge * preis * (1 - rabatt/100)) as umsatz
-            FROM produkt_stats WHERE kategorie != ''
-            GROUP BY kategorie ORDER BY umsatz DESC
-        """)
-        stats['status'] = self._query_to_df("""
-            SELECT status, COUNT(*) as anzahl, SUM(summe_brutto) as summe
-            FROM angebote GROUP BY status
-        """)
         return stats
-
+    
     def search_quotes(self, search_term: str) -> pd.DataFrame:
-        p = f"%{search_term}%"
-        return self._query_to_df("""
-            SELECT * FROM angebote
-            WHERE kunde_name LIKE ? OR angebots_nr LIKE ?
-            OR kunde_projekt LIKE ? OR kunde_nr LIKE ?
+        """Sucht Angebote"""
+        conn = sqlite3.connect(self.db_path)
+        query = """
+            SELECT * FROM angebote 
+            WHERE kunde_name LIKE ? 
+            OR angebots_nr LIKE ? 
+            OR kunde_projekt LIKE ?
+            OR kunde_nr LIKE ?
             ORDER BY erstellt_am DESC
-        """, (p, p, p, p))
-
+        """
+        pattern = f"%{search_term}%"
+        df = pd.read_sql_query(query, conn, params=(pattern, pattern, pattern, pattern))
+        conn.close()
+        return df
+    
     def update_monday_id(self, angebots_nr: str, monday_item_id: str):
-        conn, mode = _get_connection()
-        _execute(conn, "UPDATE angebote SET monday_item_id = ? WHERE angebots_nr = ?",
-                 (monday_item_id, angebots_nr))
+        """Aktualisiert Monday Item ID"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE angebote 
+            SET monday_item_id = ? 
+            WHERE angebots_nr = ?
+        """, (monday_item_id, angebots_nr))
         conn.commit()
         conn.close()
-
+    
     def update_status(self, angebots_nr: str, status: str):
-        conn, mode = _get_connection()
-        _execute(conn, "UPDATE angebote SET status = ? WHERE angebots_nr = ?",
-                 (status, angebots_nr))
+        """Aktualisiert Angebots-Status"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE angebote 
+            SET status = ? 
+            WHERE angebots_nr = ?
+        """, (status, angebots_nr))
         conn.commit()
         conn.close()
-
+    
     def delete_quote(self, angebots_nr: str):
-        conn, mode = _get_connection()
-        rows, _ = _fetchall(conn, "SELECT id FROM angebote WHERE angebots_nr = ?", (angebots_nr,))
-        if rows:
-            aid = rows[0][0]
-            _execute(conn, "DELETE FROM positionen WHERE angebots_id = ?", (aid,))
-            _execute(conn, "DELETE FROM angebote WHERE id = ?", (aid,))
+        """Löscht Angebot"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT id FROM angebote WHERE angebots_nr = ?", (angebots_nr,))
+        result = cursor.fetchone()
+        
+        if result:
+            angebots_id = result[0]
+            cursor.execute("DELETE FROM positionen WHERE angebots_id = ?", (angebots_id,))
+            cursor.execute("DELETE FROM angebote WHERE id = ?", (angebots_id,))
             conn.commit()
+        
         conn.close()
-
+    
     def export_to_excel(self, filepath: str):
-        conn, mode = _get_connection()
-        rows_a, desc_a = _fetchall(conn, "SELECT * FROM angebote")
-        rows_p, desc_p = _fetchall(conn, "SELECT * FROM positionen")
-        conn.close()
-        df_a = pd.DataFrame(rows_a, columns=[d[0] for d in desc_a]) if desc_a else pd.DataFrame()
-        df_p = pd.DataFrame(rows_p, columns=[d[0] for d in desc_p]) if desc_p else pd.DataFrame()
+        """Exportiert nach Excel"""
+        conn = sqlite3.connect(self.db_path)
+        
         with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
-            df_a.to_excel(writer, sheet_name='Angebote', index=False)
-            df_p.to_excel(writer, sheet_name='Positionen', index=False)
-            pd.DataFrame([self.get_statistics()['gesamt']]).to_excel(
-                writer, sheet_name='Statistiken', index=False)
+            pd.read_sql_query("SELECT * FROM angebote", conn).to_excel(writer, sheet_name='Angebote', index=False)
+            pd.read_sql_query("SELECT * FROM positionen", conn).to_excel(writer, sheet_name='Positionen', index=False)
+            
+            stats = self.get_statistics()
+            pd.DataFrame([stats['gesamt']]).to_excel(writer, sheet_name='Statistiken', index=False)
+        
+        conn.close()
