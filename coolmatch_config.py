@@ -22,8 +22,16 @@ APP_VERSION = "7.0"
 APP_NAME = "°coolMATCH_Kalkulator"
 
 # --- DATENBANK ---
-# WICHTIG: Liegt außerhalb von Git für Datenschutz!
-DB_PATH = "data/coolmatch_database.db"
+# WICHTIG: Streamlit Cloud hat kein persistentes Dateisystem!
+# Für Cloud: Nutze tmpfs (wird bei jedem Neustart gelöscht)
+# Für Lokal: Nutze data/ Ordner
+import os
+if os.path.exists('/mount/src'):
+    # Streamlit Cloud
+    DB_PATH = "/tmp/coolmatch_database.db"
+else:
+    # Lokal
+    DB_PATH = "data/coolmatch_database.db"
 
 # --- MONDAY.COM INTEGRATION ---
 MONDAY_API_URL = "https://api.monday.com/v2"
