@@ -22,15 +22,34 @@ APP_VERSION = "7.0"
 APP_NAME = "°coolMATCH_Kalkulator"
 
 # --- DATENBANK ---
-# WICHTIG: Streamlit Cloud hat kein persistentes Dateisystem!
-# Für Cloud: Nutze tmpfs (wird bei jedem Neustart gelöscht)
-# Für Lokal: Nutze data/ Ordner
+# Unterstützt sowohl lokale SQLite als auch Turso Cloud
 import os
+
+# Turso Konfiguration - als Modul-Variablen
+USE_TURSO = False
+TURSO_URL = ""
+TURSO_TOKEN = ""
+
+# Versuche Turso aus Secrets zu laden
+def _init_turso():
+    global USE_TURSO, TURSO_URL, TURSO_TOKEN
+    try:
+        import streamlit as st
+        TURSO_URL = st.secrets.get("TURSO_DATABASE_URL", "")
+        TURSO_TOKEN = st.secrets.get("TURSO_AUTH_TOKEN", "")
+        USE_TURSO = bool(TURSO_URL and TURSO_TOKEN)
+    except:
+        pass
+
+# Initialisiere beim Import
+_init_turso()
+
+# Datenbank-Pfad (wird nur für lokale SQLite genutzt)
 if os.path.exists('/mount/src'):
-    # Streamlit Cloud
+    # Streamlit Cloud - temporär
     DB_PATH = "/tmp/coolmatch_database.db"
 else:
-    # Lokal
+    # Lokal - persistent
     DB_PATH = "data/coolmatch_database.db"
 
 # --- MONDAY.COM INTEGRATION ---
