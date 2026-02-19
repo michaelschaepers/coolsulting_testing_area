@@ -362,27 +362,56 @@ def render_system_tab(df_samsung, default_rabatt):
         
         for i in range(1, 6):
             with st.expander(f"Raum {i}"):
-                # Typ-Filter pro Raum
+                # Typ-Filter pro Raum - ALLE Samsung Typen
                 typ_filter = st.selectbox(
                     f"Typ für Raum {i}:",
-                    ["Alle", "WF Standard", "WF Exklusiv Blk", "WF Exkl.-Prem.", 
-                     "WF Exkl.-Prem. Blk", "WF Elite", "WF Elite-Prem.+", 
-                     "WF Elite-Prem.+ Blk", "Mini-Kassette"],
+                    ["Wandgerät Standard",  # DEFAULT!
+                     "Alle", 
+                     "Wandgerät Exklusiv", 
+                     "Wandgerät Premium", 
+                     "Wandgerät Elite",
+                     "Kanal", 
+                     "1-Way Kassette",
+                     "4-Way Kassette",
+                     "360° Kassette",
+                     "Mini-Kassette",
+                     "Truhengerät",
+                     "Konsolengerät"],
                     key=f"typ_filter_{i}"
                 )
                 
-                # Filtern nach Typ
+                # Filtern nach Typ (flexibel mit Mapping)
                 df_ig_filtered = df_ig.copy()
                 if typ_filter != "Alle":
-                    df_ig_filtered = df_ig_filtered[
-                        df_ig_filtered['Bezeichnung'].str.contains(typ_filter, case=False, na=False)
+                    # Such-Begriffe pro Typ
+                    search_map = {
+                        "Wandgerät Standard": "Standard",
+                        "Wandgerät Exklusiv": "Exkl",
+                        "Wandgerät Premium": "Prem",
+                        "Wandgerät Elite": "Elite",
+                        "Kanal": "Kanal",
+                        "1-Way Kassette": "1-Way",
+                        "4-Way Kassette": "4-Way",
+                        "360° Kassette": "360",
+                        "Mini-Kassette": "Mini",
+                        "Truhengerät": "Truhe",
+                        "Konsolengerät": "Konsole"
+                    }
+                    
+                    search_term = search_map.get(typ_filter, typ_filter)
+                    df_ig_filtered = df_ig[
+                        df_ig['Bezeichnung'].str.contains(search_term, case=False, na=False)
                     ]
                 
                 if df_ig_filtered.empty:
-                    st.info(f"Keine Geräte vom Typ '{typ_filter}' gefunden")
+                    st.warning(f"⚠️ Keine Geräte vom Typ '{typ_filter}' gefunden")
+                    # DEBUG: Zeige alle verfügbaren Typen
+                    if st.checkbox(f"🔍 Alle anzeigen", key=f"debug_{i}"):
+                        st.dataframe(df_ig[['Artikelnummer', 'Bezeichnung']].head(20))
                 else:
+                    st.info(f"✓ {len(df_ig_filtered)} Geräte gefunden")
                     s_ig = st.selectbox(
-                        f"Gerät für Raum {i}:",
+                        f"Gerät auswählen:",
                         df_ig_filtered.index,
                         key=f"ig_select_{i}",
                         format_func=lambda x: f"{df_ig_filtered.loc[x,'Artikelnummer']} | {df_ig_filtered.loc[x,'Bezeichnung']} | {df_ig_filtered.loc[x,'Listenpreis']:.2f}€"
