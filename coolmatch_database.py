@@ -1,8 +1,9 @@
 # ==========================================
 # DATEI: coolmatch_database.py
-# VERSION: 7.0
+# VERSION: 7.1 - TURSO CLOUD SUPPORT
 # AUTOR: Michael Schäpers, coolsulting
 # BESCHREIBUNG: SQLite Datenbank für coolMATCH Angebote
+#               Unterstützt Turso Cloud Database
 # ==========================================
 
 import sqlite3
@@ -10,17 +11,26 @@ import pandas as pd
 from datetime import datetime
 from typing import List, Dict, Optional
 import json
+import os
 
 class CoolMatchDatabase:
-    """Verwaltet alle Angebots-Daten in SQLite"""
+    """Verwaltet alle Angebots-Daten in SQLite (lokal oder Turso Cloud)"""
     
     def __init__(self, db_path: str = "coolmatch_database.db"):
         self.db_path = db_path
         self.init_database()
     
+    def get_connection(self):
+        """Gibt SQLite Connection zurück"""
+        db_dir = os.path.dirname(self.db_path)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+        return sqlite3.connect(self.db_path)
+            return sqlite3.connect(self.db_path)
+    
     def init_database(self):
         """Erstellt Datenbank-Schema"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self.get_connection()
         cursor = conn.cursor()
         
         # Tabelle: Angebote
@@ -102,7 +112,7 @@ class CoolMatchDatabase:
         Returns:
             Angebots-ID in Datenbank
         """
-        conn = sqlite3.connect(self.db_path)
+        conn = self.get_connection()
         cursor = conn.cursor()
         
         try:
@@ -181,7 +191,7 @@ class CoolMatchDatabase:
     
     def get_all_quotes(self, limit: int = None) -> pd.DataFrame:
         """Lädt alle Angebote"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self.get_connection()
         query = "SELECT * FROM angebote ORDER BY erstellt_am DESC"
         if limit:
             query += f" LIMIT {limit}"
@@ -191,7 +201,7 @@ class CoolMatchDatabase:
     
     def get_quote_by_nr(self, angebots_nr: str) -> Optional[Dict]:
         """Lädt spezifisches Angebot mit Positionen"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self.get_connection()
         cursor = conn.cursor()
         
         cursor.execute("SELECT * FROM angebote WHERE angebots_nr = ?", (angebots_nr,))
@@ -214,7 +224,7 @@ class CoolMatchDatabase:
     
     def get_statistics(self) -> Dict:
         """Berechnet Statistiken"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self.get_connection()
         stats = {}
         
         # Gesamt-Statistiken
@@ -293,7 +303,7 @@ class CoolMatchDatabase:
     
     def search_quotes(self, search_term: str) -> pd.DataFrame:
         """Sucht Angebote"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self.get_connection()
         query = """
             SELECT * FROM angebote 
             WHERE kunde_name LIKE ? 
@@ -309,7 +319,7 @@ class CoolMatchDatabase:
     
     def update_monday_id(self, angebots_nr: str, monday_item_id: str):
         """Aktualisiert Monday Item ID"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE angebote 
@@ -321,7 +331,7 @@ class CoolMatchDatabase:
     
     def update_status(self, angebots_nr: str, status: str):
         """Aktualisiert Angebots-Status"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE angebote 
@@ -333,7 +343,7 @@ class CoolMatchDatabase:
     
     def delete_quote(self, angebots_nr: str):
         """Löscht Angebot"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self.get_connection()
         cursor = conn.cursor()
         
         cursor.execute("SELECT id FROM angebote WHERE angebots_nr = ?", (angebots_nr,))
@@ -349,7 +359,7 @@ class CoolMatchDatabase:
     
     def export_to_excel(self, filepath: str):
         """Exportiert nach Excel"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self.get_connection()
         
         with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
             pd.read_sql_query("SELECT * FROM angebote", conn).to_excel(writer, sheet_name='Angebote', index=False)

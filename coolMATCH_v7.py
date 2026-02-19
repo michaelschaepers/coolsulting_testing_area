@@ -140,13 +140,7 @@ def main():
         st.session_state.cart = []
     
     if 'db' not in st.session_state:
-        # Initialisiere mit Turso falls konfiguriert
-        st.session_state.db = CoolMatchDatabase(
-            db_path=DB_PATH,
-            use_turso=USE_TURSO,
-            turso_url=TURSO_URL,
-            turso_token=TURSO_TOKEN
-        )
+        st.session_state.db = CoolMatchDatabase(DB_PATH)
     
     if 'analytics' not in st.session_state:
         st.session_state.analytics = CoolMatchAnalytics(st.session_state.db)
@@ -303,7 +297,7 @@ def render_system_tab(df_samsung, default_rabatt):
     # System-Auswahl
     sys_cat = st.radio(
         "System:",
-        ["Single Split (RAC)", "Multi Split (FJM)", "Gewerbe (BAC)", "DVM (VRF)"],
+        ["Single Split (RAC)", "Multi Split (FJM)", "Gewerbe (BAC)"],
         horizontal=True
     )
     
@@ -380,29 +374,6 @@ def render_system_tab(df_samsung, default_rabatt):
                     add_to_cart("IG", r['Artikelnummer'], r['Bezeichnung'],
                                1, r['Listenpreis'], default_rabatt, f"Raum {i}")
                     st.toast(f"✅ Raum {i} hinzugefügt!")
-                    st.rerun()
-    
-    # === DVM ===
-    elif "DVM" in sys_cat:
-        search_dvm = st.text_input("🔍 Suche DVM:", "")
-        
-        if search_dvm:
-            df_results = df_samsung[df_samsung.apply(
-                lambda r: search_dvm.lower() in str(r).lower(), axis=1
-            )]
-            
-            if not df_results.empty:
-                sel = st.selectbox(
-                    "Teil:",
-                    df_results.index,
-                    format_func=lambda x: f"{df_results.loc[x,'Artikelnummer']} | {df_results.loc[x,'Bezeichnung']} | {df_results.loc[x,'Listenpreis']:.2f}€"
-                )
-                
-                if st.button("➕ DVM hinzufügen", type="primary"):
-                    r = df_results.loc[sel]
-                    add_to_cart("DVM", r['Artikelnummer'], r['Bezeichnung'],
-                               1, r['Listenpreis'], default_rabatt)
-                    st.success("✅ Hinzugefügt!")
                     st.rerun()
 
 # ==========================================

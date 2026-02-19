@@ -22,31 +22,11 @@ APP_VERSION = "7.0"
 APP_NAME = "°coolMATCH_Kalkulator"
 
 # --- DATENBANK ---
-# Unterstützt sowohl lokale SQLite als auch Turso Cloud
 import os
 
-# Turso Konfiguration - als Modul-Variablen
-USE_TURSO = False
-TURSO_URL = ""
-TURSO_TOKEN = ""
-
-# Versuche Turso aus Secrets zu laden
-def _init_turso():
-    global USE_TURSO, TURSO_URL, TURSO_TOKEN
-    try:
-        import streamlit as st
-        TURSO_URL = st.secrets.get("TURSO_DATABASE_URL", "")
-        TURSO_TOKEN = st.secrets.get("TURSO_AUTH_TOKEN", "")
-        USE_TURSO = bool(TURSO_URL and TURSO_TOKEN)
-    except:
-        pass
-
-# Initialisiere beim Import
-_init_turso()
-
-# Datenbank-Pfad (wird nur für lokale SQLite genutzt)
+# Datenbank-Pfad (einfache SQLite)
 if os.path.exists('/mount/src'):
-    # Streamlit Cloud - temporär
+    # Streamlit Cloud - temporär (geht bei Neustart verloren!)
     DB_PATH = "/tmp/coolmatch_database.db"
 else:
     # Lokal - persistent
@@ -91,8 +71,7 @@ ZUBEHOER_FILE_KEYWORDS = ["ubeh", "zubeh"]
 SYSTEM_TYPES = {
     'RAC': 'Single Split (RAC)',
     'FJM': 'Multi Split (FJM)',
-    'BAC': 'Gewerbe (BAC)',
-    'DVM': 'DVM (VRF)'
+    'BAC': 'Gewerbe (BAC)'
 }
 
 # --- F-GASE TEXT ---
