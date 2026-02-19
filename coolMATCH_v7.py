@@ -362,19 +362,38 @@ def render_system_tab(df_samsung, default_rabatt):
         
         for i in range(1, 6):
             with st.expander(f"Raum {i}"):
-                s_ig = st.selectbox(
-                    f"Gerät für Raum {i}:",
-                    df_ig.index,
-                    key=f"ig_select_{i}",
-                    format_func=lambda x: f"{df_ig.loc[x,'Artikelnummer']} | {df_ig.loc[x,'Bezeichnung']} | {df_ig.loc[x,'Listenpreis']:.2f}€"
+                # Typ-Filter pro Raum
+                typ_filter = st.selectbox(
+                    f"Typ für Raum {i}:",
+                    ["Alle", "WF Standard", "WF Exklusiv Blk", "WF Exkl.-Prem.", 
+                     "WF Exkl.-Prem. Blk", "WF Elite", "WF Elite-Prem.+", 
+                     "WF Elite-Prem.+ Blk", "Mini-Kassette"],
+                    key=f"typ_filter_{i}"
                 )
                 
-                if st.button(f"➕ Raum {i} hinzufügen", key=f"ig_btn_{i}"):
-                    r = df_ig.loc[s_ig]
-                    add_to_cart("IG", r['Artikelnummer'], r['Bezeichnung'],
-                               1, r['Listenpreis'], default_rabatt, f"Raum {i}")
-                    st.toast(f"✅ Raum {i} hinzugefügt!")
-                    st.rerun()
+                # Filtern nach Typ
+                df_ig_filtered = df_ig.copy()
+                if typ_filter != "Alle":
+                    df_ig_filtered = df_ig_filtered[
+                        df_ig_filtered['Bezeichnung'].str.contains(typ_filter, case=False, na=False)
+                    ]
+                
+                if df_ig_filtered.empty:
+                    st.info(f"Keine Geräte vom Typ '{typ_filter}' gefunden")
+                else:
+                    s_ig = st.selectbox(
+                        f"Gerät für Raum {i}:",
+                        df_ig_filtered.index,
+                        key=f"ig_select_{i}",
+                        format_func=lambda x: f"{df_ig_filtered.loc[x,'Artikelnummer']} | {df_ig_filtered.loc[x,'Bezeichnung']} | {df_ig_filtered.loc[x,'Listenpreis']:.2f}€"
+                    )
+                    
+                    if st.button(f"➕ Raum {i} hinzufügen", key=f"ig_btn_{i}"):
+                        r = df_ig_filtered.loc[s_ig]
+                        add_to_cart("IG", r['Artikelnummer'], r['Bezeichnung'],
+                                   1, r['Listenpreis'], default_rabatt, f"Raum {i}")
+                        st.toast(f"✅ Raum {i} hinzugefügt!")
+                        st.rerun()
 
 # ==========================================
 # TAB: ZUBEHÖR
@@ -633,17 +652,28 @@ def create_pdf_and_save(calc_df, p_firma, p_name, p_strasse, p_ort, p_email, p_t
         
         st.success("✅ PDF erfolgreich erstellt!")
         
-        # Optional: Monday.com
+        # Automatisch zu Monday.com senden (wenn konfiguriert)
         if st.session_state.monday.is_configured():
-            if st.checkbox("📤 Auch in Monday.com speichern?"):
-                monday_data = {
-                    'angebots_nr': c_nr,
-                    'datum': datetime.now(),
-                    'angebotswert': brutto,
-                    'partner': p_firma,
-                    'plz': extract_plz(p_ort)
-                }
-                save_quote_to_monday_ui(monday_data)
+            monday_data = {
+                'angebots_nr': c_nr,
+                'datum': datetime.now(),
+                'angebotswert': brutto,
+                'partner': p_firma,
+                'plz': extract_plz(p_ort)
+            }
+            
+            # Sende zu Monday mit PDF
+            with st.spinner("📤 Sende zu Monday.com..."):
+                success, item_id = st.session_state.monday.save_quote_to_monday(
+                    monday_data,
+                    pdf_bytes,
+                    f"AN_{c_nr}.pdf"
+                )
+            
+            if success:
+                st.success(f"✅ Auch in Monday.com gespeichert! (Item ID: {item_id})")
+            else:
+                st.warning("⚠️ Monday.com Upload fehlgeschlagen - PDF wurde trotzdem erstellt")
         
     except Exception as e:
         st.error(f"❌ PDF-Fehler: {e}")
