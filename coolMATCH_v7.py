@@ -41,12 +41,20 @@ def load_product_data():
     # Samsung Datei
     samsung_files = [f for f in data['files_found'] 
                      if any(kw in f for kw in SAMSUNG_FILE_KEYWORDS) and 'xlsx' in f]
+    
+    # DEBUG: Zeige gefundene Dateien
+    if not samsung_files:
+        import streamlit as st
+        st.warning(f"🔍 Suche Samsung-Datei mit Keywords: {SAMSUNG_FILE_KEYWORDS}")
+        st.info(f"📁 Gefundene XLSX-Dateien: {[f for f in data['files_found'] if 'xlsx' in f.lower()]}")
+    
     if samsung_files:
         try:
             data['samsung'] = pd.read_excel(samsung_files[0], engine='openpyxl')
             data['samsung']['Artikelgruppe'] = data['samsung']['Artikelgruppe'].astype(str)
-        except:
-            pass
+        except Exception as e:
+            import streamlit as st
+            st.error(f"❌ Fehler beim Laden: {e}")
 
     # Zubehör Datei
     zubehoer_files = [f for f in data['files_found'] 
@@ -132,7 +140,13 @@ def main():
         st.session_state.cart = []
     
     if 'db' not in st.session_state:
-        st.session_state.db = CoolMatchDatabase(DB_PATH)
+        # Initialisiere mit Turso falls konfiguriert
+        st.session_state.db = CoolMatchDatabase(
+            db_path=DB_PATH,
+            use_turso=USE_TURSO,
+            turso_url=TURSO_URL,
+            turso_token=TURSO_TOKEN
+        )
     
     if 'analytics' not in st.session_state:
         st.session_state.analytics = CoolMatchAnalytics(st.session_state.db)
