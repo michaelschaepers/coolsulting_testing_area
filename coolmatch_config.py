@@ -22,15 +22,8 @@ APP_VERSION = "7.0"
 APP_NAME = "°coolMATCH_Kalkulator"
 
 # --- DATENBANK ---
-import os
-
-# Datenbank-Pfad (einfache SQLite)
-if os.path.exists('/mount/src'):
-    # Streamlit Cloud - temporär (geht bei Neustart verloren!)
-    DB_PATH = "/tmp/coolmatch_database.db"
-else:
-    # Lokal - persistent
-    DB_PATH = "data/coolmatch_database.db"
+# WICHTIG: Liegt außerhalb von Git für Datenschutz!
+DB_PATH = "data/coolmatch_database.db"
 
 # --- MONDAY.COM INTEGRATION ---
 MONDAY_API_URL = "https://api.monday.com/v2"
@@ -71,7 +64,8 @@ ZUBEHOER_FILE_KEYWORDS = ["ubeh", "zubeh"]
 SYSTEM_TYPES = {
     'RAC': 'Single Split (RAC)',
     'FJM': 'Multi Split (FJM)',
-    'BAC': 'Gewerbe (BAC)'
+    'BAC': 'Gewerbe (BAC)',
+    'DVM': 'DVM (VRF)'
 }
 
 # --- F-GASE TEXT ---
