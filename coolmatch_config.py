@@ -18,12 +18,19 @@ LOGO_WHITE_OUTLINE = "Coolsulting_Logo_ohneHG_outlines_weiß.png"
 LOGO_BLUE = "Coolsulting_Logo_ohneHG_blau.png"
 
 # --- APP VERSION ---
-APP_VERSION = "7.0"
+APP_VERSION = "7.1"
 APP_NAME = "°coolMATCH_Kalkulator"
 
 # --- DATENBANK ---
-# WICHTIG: Liegt außerhalb von Git für Datenschutz!
-DB_PATH = "data/coolmatch_database.db"
+import os
+
+# Datenbank-Pfad (einfache SQLite)
+if os.path.exists('/mount/src'):
+    # Streamlit Cloud - temporär (geht bei Neustart verloren!)
+    DB_PATH = "/tmp/coolmatch_database.db"
+else:
+    # Lokal - persistent
+    DB_PATH = "data/coolmatch_database.db"
 
 # --- MONDAY.COM INTEGRATION ---
 MONDAY_API_URL = "https://api.monday.com/v2"
@@ -64,8 +71,7 @@ ZUBEHOER_FILE_KEYWORDS = ["ubeh", "zubeh"]
 SYSTEM_TYPES = {
     'RAC': 'Single Split (RAC)',
     'FJM': 'Multi Split (FJM)',
-    'BAC': 'Gewerbe (BAC)',
-    'DVM': 'DVM (VRF)'
+    'BAC': 'Gewerbe (BAC)'
 }
 
 # --- F-GASE TEXT ---

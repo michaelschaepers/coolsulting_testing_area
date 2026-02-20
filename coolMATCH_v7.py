@@ -1,16 +1,16 @@
 # ==========================================
 # DATEI: coolMATCH_v7.py
-# VERSION: 7.0
-# DATUM: 16.02.2026
+# VERSION: 7.1
+# DATUM: 20.02.2026
 # APPNAME: °coolMATCH_Kalkulator
 # AUTOR: Michael Schäpers, coolsulting
 #
-# ÄNDERUNGEN v7.0:
-# 1. STRUKTUR: Modulare Architektur (Config, DB, Monday, Analytics, PDF)
-# 2. FEATURES: Analytics Dashboard, Angebots-Historie, Monday.com Integration
-# 3. DATABASE: SQLite für vollständige Tracking
-# 4. UX: Verbesserte Produktsuche, Schnellzugriff
-# 5. DESIGN: CI-Design 100% beibehalten (Header, PDF, Farben)
+# ÄNDERUNGEN v7.1:
+# 1. Typ-Filter pro Raum (Standard als Default)
+# 2. Automatischer Monday.com Upload beim PDF
+# 3. Samsung Datei: S_Klima_Artikel_Import_*.xlsx
+# 4. Kein DVM mehr (nur RAC, FJM, BAC)
+# 5. Debug-Modus für Datei-Suche
 # ==========================================
 
 import streamlit as st
